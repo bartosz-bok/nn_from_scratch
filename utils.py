@@ -5,7 +5,6 @@ import numpy as np
 
 np.random.seed(0)
 
-
 class NeuralNetwork:
     def __init__(self):
         self.layers = []
@@ -28,37 +27,37 @@ class NeuralNetwork:
 
         return current_output
 
-    def backward(self, dvalues, y):
+    def backward(self, d_values, y):
         if self.loss:
-            dvalues = self.loss.backward(dvalues, y)
+            d_values = self.loss.backward(d_values, y)
 
         for layer in reversed(self.layers):
-            layer.backward(dvalues)
-            dvalues = layer.dinputs
+            layer.backward(d_values)
+            d_values = layer.dinputs
 
     def train(self, X, y, epochs=1000, learning_rate=0.01):
         for epoch in range(epochs):
             total_loss = 0
 
-            # Iterowanie po każdej próbce osobno
+            # Iterate through every sample
             for i in range(len(X)):
-                X_single = X[i]  # Pobieranie jednej próbki
-                y_single = y[i]  # Pobieranie jednej etykiety
+                X_single = X[i]
+                y_single = y[i]
 
-                # Forward pass dla jednej próbki
+                # Forward pass for single sample
                 loss = self.forward(X_single, y_single)
                 total_loss += loss
 
                 # Backward pass
                 self.backward(self.layers[-1].output, y_single)
 
-                # Aktualizacja wag i biasów
-                for layer in self.layers:  # Stochastic Gradient Descent (SGD)
-                    if hasattr(layer, 'weights'):
-                        layer.weights -= learning_rate * layer.dweights
-                        layer.biases -= learning_rate * layer.dbiases
+                # Update weights and biases
+                for layer in self.layers:
+                    if hasattr(layer, 'weights'): # update layers with weights
+                        layer.weights -= learning_rate * layer.d_weights
+                        layer.biases -= learning_rate * layer.d_biases
 
-            # Wyświetlanie średniego loss co 100 epok
+            # Show average loss
             avg_loss = total_loss / len(X)
             if epoch % 100 == 0:
                 print(f'Epoch {epoch}, Avg Loss: {avg_loss}')
@@ -72,57 +71,60 @@ class LayerDense:
         self.weights = 0.1*np.random.randn(n_inputs, n_neurons) # multiplied by `0.1` to gen smaller initial values
         self.biases = np.zeros((1, n_neurons))
 
-        self.dinputs = None
-        self.dweights = None
-        self.dbiases = None
+        self.d_inputs = None
+        self.d_weights = None
+        self.d_biases = None
 
     def forward(self, inputs):
-        # Zakładamy, że inputs jest wektorem dla jednej próbki, np. (n_inputs,)
+        # Output is simple NN [output = input * weights + biases]
         self.inputs = inputs
         self.output = np.dot(inputs, self.weights) + self.biases
 
-    def backward(self, dvalues):
-        # dvalues to wektor, np. (n_neurons,)
+    def backward(self, d_values):
 
-        # Obliczenie gradientu wag (jednowymiarowe wejścia)
-        self.dweights = np.dot(self.inputs.reshape(-1, 1), dvalues.reshape(1, -1))
+        # Get gradient of weights [d_weights = d_values * inputs^(-1)]
+        self.d_weights = np.dot(self.inputs.reshape(-1, 1), d_values.reshape(1, -1))
 
-        # Obliczenie gradientu biasów - bez sumowania, bo jest jedna próbka
-        self.dbiases = dvalues
+        # Get gradient of bias [d_bias = d_values]
+        self.d_biases = d_values
 
-        # Obliczenie gradientu wejść - zwracane w formie wektora
-        self.dinputs = np.dot(dvalues, self.weights.T)
+        # Get gradient of input
+        self.d_inputs = np.dot(d_values, self.weights.T)
 
 
 class ActivationReLU:
     def __init__(self):
         self.inputs = None
         self.output = None
-        self.dinputs = None
+        self.d_inputs = None
 
     def forward(self, inputs):
         self.inputs = inputs
         self.output = np.maximum(0, inputs)
 
-    def backward(self, dvalues):
-        self.dinputs = dvalues.copy()
-        self.dinputs[self.inputs <= 0] = 0
+    def backward(self, d_values):
+        self.d_inputs = d_values.copy()
+
+        # Get gradient of ReLU [x for x>=0 else 0]
+        self.d_inputs[self.inputs <= 0] = 0
 
 class ActivationSoftmax:
     def __init__(self):
         self.output = None
 
-        self.dinputs = None
+        self.d_inputs = None
 
     def forward(self, inputs):
-        exp_values = np.exp(inputs - np.max(inputs))  # Działa na wektorze
+        exp_values = np.exp(inputs - np.max(inputs))  # to not have to big values
         probabilities = exp_values / np.sum(exp_values)
         self.output = probabilities
 
-    def backward(self, dvalues):
+    # https://medium.com/@jsilvawasd/softmax-and-backpropagation-625c0c1f8241
+    def backward(self, d_values):
+        # Get gradient of Softmax [d_inputs = d_output_i - d_output_i * d_output_j]
         single_output = self.output.reshape(-1, 1)
         jacobian_matrix = np.diagflat(single_output) - np.dot(single_output, single_output.T)
-        self.dinputs = np.dot(jacobian_matrix, dvalues)
+        self.d_inputs = np.dot(jacobian_matrix, d_values)
 
 
 class Loss:
@@ -136,13 +138,14 @@ class Loss:
         pass
 
     @abstractmethod
-    def backward(self, dvalues, y):
+    def backward(self, d_values, y):
         pass
+
 
 
 class CategoricalCrossEntropyLoss(Loss):
     def __init__(self):
-        self.dinputs = None
+        self.d_inputs = None
 
     def forward(self, y_pred, y_true):
         y_pred_clipped = np.clip(y_pred, 1e-7, 1 - 1e-7)
@@ -157,13 +160,15 @@ class CategoricalCrossEntropyLoss(Loss):
         negative_log_likelihood = -np.log(correct_confidence)
         return negative_log_likelihood
 
-    def backward(self, dvalues, y_true):
-        labels = len(dvalues)
+    # https://medium.com/@jsilvawasd/softmax-and-backpropagation-625c0c1f8241
+    def backward(self, d_values, y_true):
+        # Get gradient [d_input = - y_true / d_output] (derivative of log)
+        labels = len(d_values)
 
         if isinstance(y_true, int):
             y_true = np.eye(labels)[y_true]
 
-        self.dinputs = -y_true / dvalues
+        self.d_inputs = -y_true / d_values
 
 
 
